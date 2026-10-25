@@ -1,0 +1,78 @@
+name: Build LINEPlus IPA
+run-name: Build LINEPlus IPA · ${{ github.run_number }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "LINE 26.16.0 復号済みIPAの直接ダウンロードURL"
+        required: true
+        type: string
+      ipa_sha256:
+        description: "入力IPAのSHA-256（任意・空欄可）"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Download → Build → Package IPA
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check Xcode and iOS SDK
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Test IPA injection
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Download LINE IPA
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+          IPA_SHA256: ${{ inputs.ipa_sha256 }}
+        run: python3 tools/download_ipa.py --output build/input/LINE.ipa
+
+      - name: Build LINEPlus extension
+        run: |
+          python3 tools/build.py
+          codesign --verify --strict build/LINEPlus.dylib
+
+      - name: Package unsigned IPA
+        run: >-
+          python3 tools/package_ipa.py build/input/LINE.ipa
+          --library build/LINEPlus.dylib
+          --output dist/LINEPlus_26.16.0_unsigned.ipa
+
+      - name: Verify output and write summary
+        run: >-
+          python3 tools/verify_ipa.py build/input/LINE.ipa
+          dist/LINEPlus_26.16.0_unsigned.ipa
+          --library build/LINEPlus.dylib
+
+      - name: Upload built IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LINEPlus-26.16.0-unsigned-${{ github.run_number }}
+          path: |
+            dist/*.ipa
+            dist/*.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
